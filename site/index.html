@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- リンクを知っている人だけが使う前提なので、検索エンジンには載せない -->
+<meta name="robots" content="noindex">
+<title>ChiyoRush · 始発</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<!-- ホーム画面に追加したときのアイコンと名前。iPhoneは apple-touch-icon、Androidは manifest を読む -->
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-title" content="ChiyoRush">
+<style>
+/* 駅を選ぶ操作帯の下に、次の発車と時刻表を1列で積む。スマホで片手で読む前提 */
+:root {
+  --bg: #f4f7f5;
+  --surface: #ffffff;
+  --fg: #15211b;
+  --muted: #5d6b64;
+  --line: #d8e1dc;
+  --accent: #00a676;        /* 千代田線のラインカラー寄り */
+  --accent-ink: #ffffff;
+  --now: #e3f4ec;
+  /* 列の区分の色。直通=灰色（狙わない列車なので目立たせない）、北綾瀬始発=青（まあまあ）、ほかの千代田線内の始発・終着=緑（空いている） */
+  --through-bg: #e5e8e6; --through-fg: #4f5a55;
+  --kitaayase-bg: #dae7f8; --kitaayase-fg: #1a4e8c;
+  --inline-bg: #d6f0e2; --inline-fg: #136b43;
+  --font-body: "BIZ UDPGothic", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  --font-time: "BIZ UDGothic", "Hiragino Sans", "Yu Gothic UI", "Meiryo", monospace;
+}
+/* 配色はシステムの設定に依らず、出勤はライト・退勤はダークに固定する（どちらのモードか、ひと目で分かるように） */
+:root { color-scheme: light; }
+:root[data-theme="dark"] {
+  --bg: #0f1513; --surface: #17201c; --fg: #e3ece7; --muted: #9aaaa2; --line: #2a3832;
+  --accent: #2fcf9a; --accent-ink: #06231a; --now: #1c3329;
+  --through-bg: #252c29; --through-fg: #a3aea8;
+  --kitaayase-bg: #1d2f48; --kitaayase-fg: #a9cdf6;
+  --inline-bg: #173828; --inline-fg: #9fe2bf;
+  color-scheme: dark;
+}
+
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.6;
+}
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+  display: grid;
+  /* 列の幅を画面に固定する。表が広くなっても、表の枠の中で横スクロールさせる */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+header { display: flex; align-items: center; gap: 8px; }
+.head-text { flex: 1 1 auto; min-width: 0; margin-left: 4px; }
+.gear {
+  flex: none;
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 50%;
+  background: var(--surface); color: var(--fg);
+  cursor: pointer;
+}
+.gear[aria-expanded="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.gear svg { width: 18px; height: 18px; }
+/* 駅・方面・曜日の選択は、歯車を押したときだけ出す */
+.controls {
+  padding: 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface);
+}
+.panel-foot { display: flex; justify-content: flex-end; }
+.close-btn {
+  font: inherit; font-size: 14px;
+  padding: 8px 28px;
+  border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink); font-weight: 700;
+  cursor: pointer;
+}
+/* ChiyoRush のマーク（アイコンと同じＣ）。前のめりのＣが速度線を引いて走る（千代田＋ダッシュ＋ラッシュ） */
+.line-mark { flex: none; width: 40px; height: 40px; display: block; }
+.line-mark .fg { stroke: var(--accent); }
+h1 { margin: 0; font-size: 22px; line-height: 1.3; letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+/* 名前の横に、いまのモード（始発で分けるか、終着で分けるか）を札で出す */
+.mode-tag {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
+  padding: 1px 8px;
+  border: 1.5px solid var(--accent); border-radius: 999px;
+  color: var(--accent);
+}
+.sub { margin: 0; color: var(--muted); font-size: 13px; }
+
+.controls { display: grid; gap: 10px; }
+.field { display: grid; gap: 4px; }
+.label { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; }
+/* 駅は、iPhoneの日付入力のような回すホイールで選ぶ。中央の帯に止まった駅が選ばれる */
+.wheel-box {
+  position: relative;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface);
+}
+.wheel-box::before {
+  content: ""; position: absolute; left: 6px; right: 6px; top: 50%; height: 40px;
+  transform: translateY(-50%);
+  border-radius: 8px; background: var(--now);
+  pointer-events: none;
+}
+.wheel {
+  position: relative;
+  height: 200px;               /* 5駅ぶん。上下2駅ずつ前後が見える */
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  perspective: 500px;
+  -webkit-mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent);
+  mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent);
+}
+.wheel::-webkit-scrollbar { display: none; }
+.wheel:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.wheel-pad { height: 80px; }
+.wheel-item {
+  height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  scroll-snap-align: center;
+  font-size: 17px;
+  cursor: pointer;
+  user-select: none;
+}
+.wheel-item[aria-selected="true"] { font-weight: 700; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button {
+  flex: 1 1 0;
+  font: inherit;
+  padding: 9px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.next { display: grid; gap: 8px; }
+.next h2, .table-head h2 { margin: 0; font-size: 14px; color: var(--muted); font-weight: 400; letter-spacing: 0.04em; }
+/* スマホ幅（約340px）で3つ並ぶ最小幅にし、余りは均等に配る */
+.next-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.next-list .empty { grid-column: 1 / -1; }
+.dep {
+  display: grid; gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--cbg);
+  color: var(--cfg);
+}
+.dep .t { font-family: var(--font-time); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dep .o { font-size: 12px; font-weight: 700; }
+.dep .in { font-size: 12px; font-variant-numeric: tabular-nums; }
+.k-through { --cbg: var(--through-bg); --cfg: var(--through-fg); }
+.k-kitaayase { --cbg: var(--kitaayase-bg); --cfg: var(--kitaayase-fg); }
+.k-inline { --cbg: var(--inline-bg); --cfg: var(--inline-fg); }
+/* 表の見出しは、同じ色の札にする */
+.tag { display: inline-block; padding: 2px 8px; border-radius: 6px; background: var(--cbg); color: var(--cfg); }
+.empty { color: var(--muted); font-size: 13px; margin: 0; }
+
+.table-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.toggles { display: flex; gap: 14px; flex-wrap: wrap; }
+.toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+/* 表は枠の中でスクロールし、見出しの行は枠の上に貼りつける */
+.scroll {
+  position: relative;
+  overflow: auto;
+  max-height: 17em;          /* 見出しの行と、およそ5時間ぶん */
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+}
+/* リンクをコピーできなかったときだけ、URLを出して手で選べるようにする */
+.copy-status { font-size: 12px; color: var(--muted); word-break: break-all; user-select: all; }
+.hint { margin: 0; font-size: 13px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 7px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--surface);
+  font-size: 13px; font-weight: 700; white-space: nowrap;
+  border-bottom: 0;
+  box-shadow: inset 0 -2px 0 var(--line);
+}
+th.hour { font-family: var(--font-time); width: 3.2em; white-space: nowrap; color: var(--muted); font-weight: 400; }
+td.times { font-family: var(--font-time); font-size: 15px; line-height: 1.7; }
+td.times span { display: inline-block; margin-right: 0.7em; }
+td.count { font-family: var(--font-time); color: var(--muted); white-space: nowrap; }
+tr.now th.hour, tr.now td { background: var(--now); }
+tr.now th.hour { color: var(--fg); font-weight: 700; }
+td.through-times { color: var(--muted); }
+
+/* 下部は、ページの目的、データの出どころ、注意書きを短く出す。使い方は画面を見れば分かるので書かない */
+footer { color: var(--muted); font-size: 12px; display: grid; gap: 8px; }
+footer p { margin: 0; }
+footer a { color: inherit; }
+.notes { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.notes li { padding-left: 1em; text-indent: -1em; }
+.notes li::before { content: "※"; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .seg button { transition: background-color 120ms ease; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg class="line-mark" viewBox="40 40 432 432" aria-hidden="true">
+      <g class="fg" fill="none" stroke-linecap="round">
+        <path d="M 371 186 A 118 118 0 1 0 371 326" stroke-width="60" transform="translate(282 256) skewX(-14) scale(0.9) translate(-256 -256)"></path>
+        <g stroke-width="22" transform="translate(0 256) skewX(-14) translate(0 -256)"><line x1="70" y1="206" x2="128" y2="206"></line><line x1="70" y1="256" x2="128" y2="256"></line><line x1="70" y1="306" x2="128" y2="306"></line></g>
+      </g>
+    </svg>
+    <div class="head-text">
+      <h1><span lang="en">ChiyoRush</span><span class="mode-tag" id="mode-tag">始発</span></h1>
+      <p class="sub" id="current"></p>
+    </div>
+    <button type="button" class="gear" id="settings-btn" aria-expanded="false" aria-controls="controls" aria-label="駅・方面を選ぶ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
+    <button type="button" class="gear" id="copy-link" aria-label="この駅・方面で開くリンクをコピー" title="この駅・方面で開くリンクをコピー">
+      <svg class="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+      </svg>
+      <svg class="icon-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </button>
+  </header>
+  <output class="copy-status" id="copy-status" aria-live="polite" hidden></output>
+
+  <section class="controls" id="controls" aria-label="表示する時刻表" hidden>
+    <p class="hint" id="setup-hint" hidden>乗る駅を回して選んでください。出勤・退勤と方面は、駅と時刻から自動で選びます。合っていればOKを押してください。</p>
+    <!-- 駅 → 出勤・退勤 → 方面の順。見出しは無くても分かるので、読み上げ用の名前だけ付ける -->
+    <div class="wheel-box">
+      <div class="wheel" id="station" role="listbox" tabindex="0" aria-label="駅"></div>
+    </div>
+    <div class="seg" role="group" aria-label="出勤・退勤（駅・方面はそれぞれ覚える）" id="mode">
+      <button type="button" data-v="origin">出勤（始発駅特定）</button>
+      <button type="button" data-v="terminal">退勤（終着駅特定）</button>
+    </div>
+    <div class="seg" role="group" aria-label="方面" id="direction">
+      <button type="button" data-v="YoyogiUehara">代々木上原方面</button>
+      <button type="button" data-v="KitaAyase">綾瀬方面</button>
+    </div>
+    <!-- 曜日は今日の曜日で自動に決める。確かめたいときだけ hidden を外して使う -->
+    <div class="field" hidden>
+      <span class="label" id="cal-label">曜日</span>
+      <div class="seg" role="group" aria-labelledby="cal-label" id="calendar">
+        <button type="button" data-v="Weekday">平日</button>
+        <button type="button" data-v="SaturdayHoliday">土休日</button>
+      </div>
+    </div>
+    <div class="panel-foot">
+      <button type="button" class="close-btn" id="close-settings">OK</button>
+    </div>
+  </section>
+
+  <section class="next" aria-live="polite">
+    <h2 id="next-title">次の発車</h2>
+    <div class="next-list" id="next-list"></div>
+  </section>
+
+  <section class="table-sec">
+    <div class="table-head">
+      <h2 id="table-title">時刻表</h2>
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="show-through"> 直通の時刻も表示</label>
+      </div>
+    </div>
+    <div class="scroll"><table id="table"></table></div>
+  </section>
+
+  <footer>
+    <p>このページについて: 千代田線の列車のうち、小田急線・常磐線に直通しない列車を見分けるアプリです。直通運転する列車に比べて、車内が空いていることが期待されます。</p>
+    <!-- ODPTの開発者ガイドライン 3.1 の表示（提供元、正確性・完全性、問い合わせ先）。折りたたまずに出しておく -->
+    <p>（出典: <a href="https://www.odpt.org/" target="_blank" rel="noopener">公共交通オープンデータセンター（ODPT）</a>、<span id="issued"></span>）</p>
+    <ul class="notes">
+      <li>内容の正確性・完全性は保証されません。遅延や運転見合わせは反映されないので、運行情報は東京メトロの公式サイトやアプリでご確認ください。</li>
+      <li>表示内容について、東京メトロへ直接お問い合わせにならないようお願いします。このページへのお問い合わせは、<a href="https://github.com/gracom/chiyorush/issues" target="_blank" rel="noopener">GitHubのIssue</a>からお寄せください。</li>
+    </ul>
+  </footer>
+</div>
+
+<script type="application/json" id="timetable-data"></script>
+<script>
+(() => {
+  const THROUGH = "直通";
+  // 発車は [分, 始発駅の番号, 終着駅の番号]。モードで、どちらで列車を分けるかを切り替える
+  const groups = () => (state.mode === "terminal" ? data.terminals : data.origins);
+  const groupOf = (d) => (state.mode === "terminal" ? d[2] : d[1]);
+  // 色の区分: 直通（常磐線・小田急線と行き来する）／北綾瀬始発／ほかの千代田線内の始発・終着
+  const kindOf = (gi) => {
+    const g = groups()[gi];
+    if (g.label === THROUGH) return "k-through";
+    return state.mode === "origin" && g.station === "KitaAyase" ? "k-kitaayase" : "k-inline";
+  };
+  const MODES = ["origin", "terminal"];
+  // 共有用のリンクの土台。ページ自身のURLから #… を除いたもの
+  const SHARE_BASE = location.origin + location.pathname;
+  const DIRECTIONS = ["YoyogiUehara", "KitaAyase"];
+  const $ = (id) => document.getElementById(id);
+
+  let data = null;
+  // 初めて開いた人には、特定の個人に結びつかない大きな駅を出す
+  const DEFAULT = { station: "Otemachi", direction: "YoyogiUehara" };
+  // 出勤（始発で分ける）と退勤（終着で分ける）は、乗る駅も方面も違うので、駅・方面をモードごとに覚える
+  // calendarPinned: 隠した曜日の切り替えを使ったときだけ立て、今日の曜日で上書きしない（確かめる用）
+  const state = { ...DEFAULT, mode: "origin", presets: {}, calendar: null, calendarPinned: false, showThrough: false, setup: false };
+
+  // 往路（出勤）と復路（退勤）の駅・方面だけを、このブラウザのキャッシュ（Cache Storage）に残す。localStorage は使わない
+  // キャッシュが使えない環境に備えて、同じ中身をクッキーにも書いておく（どちらか残っている方から読む）
+  const CACHE_NAME = "chiyorush";
+  const CACHE_KEY = "__chiyorush/presets.json";
+  const COOKIE = "chiyorush_presets";
+  let remembered = null;   // 読み込んだ（または最後に書いた）往路・復路の組。無ければ null
+  const validPreset = (p) => Boolean(p && data.stations.some((s) => s.id === p.station) && DIRECTIONS.includes(p.direction));
+  function cleanPresets(obj) {
+    const out = {};
+    for (const m of MODES) if (validPreset(obj && obj[m])) out[m] = { station: obj[m].station, direction: obj[m].direction };
+    return Object.keys(out).length ? out : null;
+  }
+  async function readStore() {
+    let raw = null;
+    try {
+      if (window.caches) {
+        const res = await (await caches.open(CACHE_NAME)).match(CACHE_KEY);
+        if (res) raw = await res.json();
+      }
+    } catch (_) {}
+    if (!cleanPresets(raw)) {
+      try {
+        const m = document.cookie.match(new RegExp(`(?:^|; )${COOKIE}=([^;]*)`));
+        if (m) raw = JSON.parse(decodeURIComponent(m[1]));
+      } catch (_) {}
+    }
+    return cleanPresets(raw);
+  }
+  function writeStore(presets) {
+    const json = JSON.stringify(presets);
+    try {
+      if (window.caches) {
+        caches.open(CACHE_NAME)
+          .then((c) => c.put(CACHE_KEY, new Response(json, { headers: { "Content-Type": "application/json" } })))
+          .catch(() => {});
+      }
+    } catch (_) {}
+    try { document.cookie = `${COOKIE}=${encodeURIComponent(json)}; Max-Age=${400 * 86400}; Path=/; SameSite=None; Secure; Partitioned`; } catch (_) {}
+  }
+  const todayCalendar = () => (nowJst().weekend ? "SaturdayHoliday" : "Weekday");
+  // 出勤・退勤は前回の選択を引き継がず、開いた時刻で決める（朝は出勤、正午からは退勤）
+  const modeByClock = () => (nowJst().minutes < 12 * 60 ? "origin" : "terminal");
+  const applyTheme = () => { document.documentElement.dataset.theme = state.mode === "terminal" ? "dark" : "light"; };
+
+  // 優先順: リンクの #駅.方面（退勤なら末尾に .terminal） → このブラウザに残した前回の選択 → 既定
+  // 出勤・退勤はリンクに無ければ時刻で決め、その組の駅・方面を前回の選択から出す
+  // 戻り値は「リンクにも前回の選択にも駅が無かったか」（＝初めて開いた）
+  function load() {
+    state.mode = modeByClock();
+    if (remembered) {
+      state.presets = { ...remembered };
+      const p = state.presets[state.mode];
+      const other = state.presets[MODES.find((m) => m !== state.mode)];
+      if (p) Object.assign(state, p);
+      // 片方しか残っていなければ、同じ駅で方面だけ逆にする（出勤・退勤の切り替えと同じ考え方）
+      else if (other) { state.station = other.station; state.direction = DIRECTIONS.find((d) => d !== other.direction); }
+    }
+    const [st, dir, mode] = location.hash.slice(1).split(".");
+    const linked = Boolean(st && data.stations.some((s) => s.id === st));
+    if (linked) {
+      state.station = st;
+      if (DIRECTIONS.includes(dir)) state.direction = dir;
+      state.mode = mode === "terminal" ? "terminal" : "origin";
+    }
+    if (!data.stations.some((s) => s.id === state.station)) state.station = DEFAULT.station;
+    if (!DIRECTIONS.includes(state.direction)) state.direction = DEFAULT.direction;
+    if (!MODES.includes(state.mode)) state.mode = "origin";
+    return !remembered && !linked;
+  }
+  const shareUrl = () => `${SHARE_BASE}#${state.station}.${state.direction}${state.mode === "terminal" ? ".terminal" : ""}`;
+  function save() {
+    state.presets[state.mode] = { station: state.station, direction: state.direction };
+    // 残すのは往路・復路の駅と方面だけ（「直通の時刻も表示」は毎回オフから始める）
+    const next = cleanPresets(state.presets);
+    if (next && JSON.stringify(next) !== JSON.stringify(remembered)) { remembered = next; writeStore(next); }
+  }
+  // 初めて開いたときの方面。出勤は、国会議事堂前（C07）〜北綾瀬なら代々木上原方面、代々木上原〜赤坂（C06）なら綾瀬方面。退勤はその逆
+  function autoDirection() {
+    const st = data.stations.find((s) => s.id === state.station);
+    const go = st.order >= 7 ? "YoyogiUehara" : "KitaAyase";
+    const back = DIRECTIONS.find((d) => d !== go);
+    state.presets = { origin: { station: state.station, direction: go }, terminal: { station: state.station, direction: back } };
+    state.direction = state.mode === "terminal" ? back : go;
+  }
+  // 出勤・退勤を切り替えたら、そのモードで前に選んだ駅・方面に戻す。まだ選んでいなければ、同じ駅で方面だけ逆にする
+  function switchMode(mode) {
+    if (mode === state.mode) return;
+    save();
+    state.mode = mode;
+    const p = state.presets[mode];
+    if (p) Object.assign(state, p);
+    else state.direction = DIRECTIONS.find((d) => d !== state.direction);
+    save();
+  }
+
+  // 日本時間の今。深夜0〜2時台は前日の続きとして24時以降で数える
+  function nowJst() {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Tokyo", hour12: false, weekday: "short", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(new Date()).map((p) => [p.type, p.value]));
+    let h = Number(parts.hour) % 24, m = Number(parts.minute);
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let wd = days.indexOf(parts.weekday);
+    if (h < 3) { h += 24; wd = (wd + 6) % 7; }
+    return { minutes: h * 60 + m, seconds: Number(parts.second) % 60, weekend: wd === 0 || wd === 6 };
+  }
+
+  const fmt = (min) => `${Math.floor(min / 60) % 24}:${String(min % 60).padStart(2, "0")}`;
+  // 表の中は行の見出しに「◯時」があるので、分だけ出す
+  const mm = (min) => String(min % 60).padStart(2, "0");
+  const code = (order) => `C${String(order).padStart(2, "0")}`;
+
+  // その駅を通る列車の、千代田線内の始発駅（終着駅）の列。駅に近い順
+  function columns(deps, station) {
+    const byId = Object.fromEntries(data.stations.map((s) => [s.id, s]));
+    const used = new Set(deps.map(groupOf));
+    const cols = [...used].filter((i) => groups()[i].label !== THROUGH);
+    const here = byId[station].order;
+    const dist = (i) => Math.abs(byId[groups()[i].station].order - here);
+    cols.sort((a, b) => dist(a) - dist(b));
+    return cols;
+  }
+
+  function depsFor(calendar) {
+    return ((data.timetable[calendar] || {})[state.direction] || {})[state.station] || [];
+  }
+
+  const nextTitle = (now) => `次の発車（${fmt(now.minutes)}:${String(now.seconds).padStart(2, "0")} 現在）`;
+
+  function renderNext() {
+    const list = $("next-list");
+    list.replaceChildren();
+    const now = nowJst();
+    const today = now.weekend ? "SaturdayHoliday" : "Weekday";
+    if (state.calendar !== today) {
+      $("next-title").textContent = "次の発車";
+      const p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = `今日は${today === "Weekday" ? "平日" : "土休日"}です。次の発車は、曜日で${today === "Weekday" ? "平日" : "土休日"}を選ぶと出ます。`;
+      list.append(p);
+      return;
+    }
+    const upcoming = depsFor(today).filter((d) => d[0] >= now.minutes).slice(0, 6);
+    $("next-title").textContent = nextTitle(now);
+    if (!upcoming.length) {
+      const p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = "今日の発車は終わりました。";
+      list.append(p);
+      return;
+    }
+    for (const d of upcoming) {
+      const t = d[0], gi = groupOf(d);
+      const el = document.createElement("div");
+      el.className = `dep ${kindOf(gi)}`;
+      el.innerHTML = `<span class="t"></span><span class="o"></span><span class="in"></span>`;
+      el.querySelector(".t").textContent = fmt(t);
+      el.querySelector(".o").textContent = groups()[gi].label;
+      el.querySelector(".in").textContent = t === now.minutes ? "まもなく" : `あと${t - now.minutes}分`;
+      list.append(el);
+    }
+  }
+
+  function renderTable(cols) {
+    const deps = depsFor(state.calendar);
+    const table = $("table");
+    table.replaceChildren();
+    const now = nowJst();
+    const todayMatches = state.calendar === (now.weekend ? "SaturdayHoliday" : "Weekday");
+
+    const thead = table.createTHead().insertRow();
+    const h0 = document.createElement("th"); h0.textContent = "時"; h0.className = "hour"; thead.append(h0);
+    for (const gi of cols) {
+      const th = document.createElement("th");
+      const tag = document.createElement("span");
+      tag.className = `tag ${kindOf(gi)}`; tag.textContent = groups()[gi].label;
+      th.append(tag);
+      thead.append(th);
+    }
+    const hThrough = document.createElement("th");
+    const tagThrough = document.createElement("span");
+    tagThrough.className = "tag k-through"; tagThrough.textContent = state.showThrough ? "直通" : "直通（本数）";
+    hThrough.append(tagThrough);
+    thead.append(hThrough);
+
+    const hours = new Map();
+    for (const d of deps) {
+      const h = Math.floor(d[0] / 60);
+      if (!hours.has(h)) hours.set(h, []);
+      hours.get(h).push(d);
+    }
+    const body = table.createTBody();
+    for (const [h, list] of [...hours].sort((a, b) => a[0] - b[0])) {
+      const tr = body.insertRow();
+      tr.dataset.h = String(h);
+      if (todayMatches && Math.floor(now.minutes / 60) === h) tr.className = "now";
+      const th = document.createElement("th");
+      th.className = "hour"; th.scope = "row"; th.textContent = `${h % 24}時`;
+      tr.append(th);
+      for (const gi of cols) {
+        const td = tr.insertCell(); td.className = "times";
+        for (const d of list.filter((d) => groupOf(d) === gi)) {
+          const s = document.createElement("span"); s.textContent = mm(d[0]); td.append(s);
+        }
+      }
+      const through = list.filter((d) => !cols.includes(groupOf(d)));
+      const td = tr.insertCell();
+      if (state.showThrough) {
+        td.className = "times through-times";
+        for (const d of through) { const s = document.createElement("span"); s.textContent = mm(d[0]); td.append(s); }
+      } else {
+        td.className = "count"; td.textContent = `${through.length}本`;
+      }
+    }
+  }
+
+  // いまの時台（無ければその次の時台）の行を、枠の一番上に持ってくる
+  function scrollToNow() {
+    const box = document.querySelector(".scroll");
+    const hour = Math.floor(nowJst().minutes / 60);
+    const rows = [...$("table").tBodies[0]?.rows || []];
+    const row = rows.find((r) => Number(r.dataset.h) >= hour);
+    const headH = $("table").tHead?.offsetHeight || 0;
+    box.scrollTop = row ? row.offsetTop - headH : 0;
+  }
+
+  // 駅のホイール。止まった位置の駅を選び、選んだ駅の位置へ回す
+  const ITEM_H = 40;
+  const wheel = () => $("station");
+  const wheelIndex = () => Math.max(0, Math.min(data.stations.length - 1, Math.round(wheel().scrollTop / ITEM_H)));
+  // 中央から離れた駅ほど奥へ倒し、回している感じを出す
+  function tiltWheel() {
+    const w = wheel(), center = w.scrollTop + w.clientHeight / 2;
+    for (const el of w.querySelectorAll(".wheel-item")) {
+      const d = Math.max(-4, Math.min(4, (el.offsetTop + ITEM_H / 2 - center) / ITEM_H));
+      el.style.transform = `rotateX(${-d * 18}deg)`;
+    }
+  }
+  function markWheel(i) {
+    const items = wheel().querySelectorAll(".wheel-item");
+    items.forEach((el, j) => el.setAttribute("aria-selected", String(j === i)));
+    wheel().setAttribute("aria-activedescendant", items[i].id);
+  }
+  function syncWheel(smooth = false) {
+    const i = Math.max(0, data.stations.findIndex((s) => s.id === state.station));
+    wheel().scrollTo({ top: i * ITEM_H, behavior: smooth ? "smooth" : "auto" });
+    markWheel(i);
+    tiltWheel();
+  }
+  function settleWheel() {
+    const i = wheelIndex();
+    markWheel(i);
+    const id = data.stations[i].id;
+    if (id === state.station) return;
+    state.station = id;
+    if (state.setup) autoDirection();
+    save(); render({ scroll: true, keepWheel: true });
+  }
+  function buildWheel() {
+    const w = wheel();
+    w.append(Object.assign(document.createElement("div"), { className: "wheel-pad" }));
+    data.stations.forEach((s, i) => {
+      const el = document.createElement("div");
+      el.className = "wheel-item"; el.role = "option"; el.id = `st-${s.id}`;
+      el.textContent = `${code(s.order)} ${s.name}`;
+      el.addEventListener("click", () => w.scrollTo({ top: i * ITEM_H, behavior: "smooth" }));
+      w.append(el);
+    });
+    w.append(Object.assign(document.createElement("div"), { className: "wheel-pad" }));
+    let timer = 0, ticking = false;
+    w.addEventListener("scroll", () => {
+      if (!ticking) { ticking = true; requestAnimationFrame(() => { ticking = false; tiltWheel(); }); }
+      clearTimeout(timer); timer = setTimeout(settleWheel, 150);
+    });
+    w.addEventListener("keydown", (e) => {
+      const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      w.scrollTo({ top: (wheelIndex() + step) * ITEM_H, behavior: "smooth" });
+    });
+  }
+
+  function render(opts = {}) {
+    for (const [id, key] of [["mode", "mode"], ["direction", "direction"], ["calendar", "calendar"]]) {
+      for (const b of $(id).querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === state[key]));
+    }
+    // 1分ごとの描き直しでは回さない（回している途中に引き戻さないように）
+    if (opts.scroll && !opts.keepWheel) syncWheel();
+    $("show-through").checked = state.showThrough;
+
+    // 列と色は平日・土休日で共通にする（切り替えても色が入れ替わらないように）
+    const all = [...depsFor("Weekday"), ...depsFor("SaturdayHoliday")];
+    const cols = columns(all, state.station);
+
+    const st = data.stations.find((s) => s.id === state.station);
+    const dirName = state.direction === "YoyogiUehara" ? "代々木上原方面" : "綾瀬方面";
+    $("table-title").textContent = `${st.name}・${dirName}`;
+    const tag = state.mode === "terminal" ? "終着" : "始発";
+    $("mode-tag").textContent = tag;
+    document.title = `ChiyoRush · ${tag}`;
+    applyTheme();
+    // 出勤・退勤は見出しの札（始発・終着）で分かるので、ここには書かない
+    $("current").textContent = `${code(st.order)} ${st.name}・${dirName}`;
+
+    renderNext();
+    // 表は作り直すと枠のスクロールが先頭に戻るので、位置を覚えておいて戻す
+    const box = document.querySelector(".scroll");
+    const keep = box.scrollTop;
+    renderTable(cols);
+    // 選び直したときだけ動かす。1分ごとの描き直しでは、読んでいる位置を動かさない
+    if (opts.scroll) scrollToNow();
+    else box.scrollTop = keep;
+  }
+
+  async function init(json) {
+    data = json;
+    remembered = await readStore();
+    const firstVisit = load();
+    state.calendar = todayCalendar();
+    // 初めて開いた人は、乗る駅を選ぶと出勤・退勤それぞれの方面が自動で入る。OKを押すまで続ける
+    state.setup = firstVisit;
+    if (firstVisit) autoDirection();
+
+    buildWheel();
+    for (const [id, key] of [["direction", "direction"], ["calendar", "calendar"]]) {
+      $(id).addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        state[key] = b.dataset.v;
+        if (key === "calendar") state.calendarPinned = true;
+        // 方面を自分で選んだら、駅を回しても方面は自動で変えない
+        if (key === "direction") state.setup = false;
+        save(); render({ scroll: true });
+      });
+    }
+    $("mode").addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      switchMode(b.dataset.v); render({ scroll: true });
+    });
+    $("show-through").addEventListener("change", (e) => { state.showThrough = e.target.checked; save(); render(); });
+    // コピーできたら少しの間✓に変える。できなかったらURLを出して手で選べるようにする
+    $("copy-link").addEventListener("click", () => {
+      const url = shareUrl();
+      const btn = $("copy-link"), status = $("copy-status");
+      // SVGには hidden プロパティが無いので、属性で切り替える
+      const done = (on) => { btn.querySelector(".icon-link").toggleAttribute("hidden", on); btn.querySelector(".icon-done").toggleAttribute("hidden", !on); };
+      navigator.clipboard.writeText(url)
+        .then(() => { status.hidden = true; done(true); setTimeout(() => done(false), 1500); })
+        .catch(() => { status.textContent = url; status.hidden = false; });
+    });
+    window.addEventListener("hashchange", () => { load(); render({ scroll: true }); });
+    const setPanel = (open, focus = true) => {
+      $("controls").hidden = !open;
+      $("settings-btn").setAttribute("aria-expanded", String(open));
+      // 隠れている間は回せないので、開いたときに選んでいる駅へ合わせる
+      if (open) syncWheel();
+      if (open && focus) $("station").focus();
+      $("setup-hint").hidden = !(open && state.setup);
+      if (!open) state.setup = false;
+      // 選ばずに閉じても、既定の駅で納得したものとして残し、次からは開かない
+      if (!open) save();
+    };
+    $("settings-btn").addEventListener("click", () => setPanel($("controls").hidden));
+    $("close-settings").addEventListener("click", () => { setPanel(false); $("settings-btn").focus(); });
+    // 初めて開いた人には、まず駅・方面を選ぶ欄を見せる
+    if (firstVisit) setPanel(true, false);
+    // ODPTのガイドラインに合わせ、時刻表の改正日と、データを取得した日を出す。一般向けに「2026年3月14日」の形にする
+    const jpDate = (d) => (d ? d.replace(/^(\d{4})-0?(\d+)-0?(\d+).*$/, "$1年$2月$3日") : "不明");
+    $("issued").textContent = `時刻表は${jpDate(data.issued)}改正分（${jpDate(data.fetched)}取得）`;
+    render({ scroll: true });
+    // 時計は1秒ごとに進め、分が変わったら「次の発車」と今の時台を描き直す
+    let lastMinute = nowJst().minutes;
+    setInterval(() => {
+      const now = nowJst();
+      if (now.minutes !== lastMinute) {
+        lastMinute = now.minutes;
+        // 開いたまま日付をまたいでも、今日の曜日の時刻表に替える
+        if (!state.calendarPinned) state.calendar = todayCalendar();
+        render(); return;
+      }
+      if (state.calendar === (now.weekend ? "SaturdayHoliday" : "Weekday")) $("next-title").textContent = nextTitle(now);
+    }, 1000);
+  }
+
+  // データを読む前に配色だけ決める。夜に開いたとき、明るい画面が一瞬出ないように
+  const [hashStation, , hashMode] = location.hash.slice(1).split(".");
+  state.mode = hashStation ? (hashMode === "terminal" ? "terminal" : "origin") : modeByClock();
+  applyTheme();
+
+  // 時刻表はページに埋め込んである（別ファイルを取りに行く往復を省き、HTMLが届いた時点で表示する）
+  const failed = () => { $("next-list").innerHTML = '<p class="empty">時刻表のデータを読み込めませんでした。ページを開き直してください。</p>'; };
+  let json = null;
+  try { json = JSON.parse($("timetable-data").textContent); } catch (_) {}
+  if (json) init(json).catch(failed); else failed();
+})();
+</script>
+</body>
+</html>
