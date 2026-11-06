@@ -45,6 +45,26 @@ python3 scripts/build_data.py
 python3 scripts/build_site.py      # _site/index.html をブラウザで開いて確かめる
 ```
 
+## データの取り方
+
+- 取得する範囲は絞らない。千代田線の全列車・両方向・全曜日区分（平日・土休日）・全時間帯を取る。
+- 使うAPIは`odpt:TrainTimetable`（列車ごとの時刻表）。始発駅は`odpt:originStation`、曜日区分は`odpt:calendar`から取る。
+- 1回の応答は1000件で打ち切られるので、曜日区分×方向の4回に分けて取る（2026-10-25時点で1回あたり264〜336本）。
+- `odpt:StationTimetable`（駅ごとの時刻表）には始発駅が入っていないので使わない。同じAPIの`odpt:isOrigin`は「この駅から出る列車か」を示すだけで、途中駅では始発駅の判定に使えない。
+- 曜日区分は`odpt.Calendar:Weekday`（平日）と`odpt.Calendar:SaturdayHoliday`（土休日）の2つ。
+- 方向は方面名で書き、「上り・下り」は使わない。ODPTは綾瀬方面を`ascendingRailDirection`（上り）としていて、日常の呼び方と食い違うため。
+  - 代々木上原方面: `odpt.RailDirection:TokyoMetro.YoyogiUehara`
+  - 綾瀬方面: `odpt.RailDirection:TokyoMetro.KitaAyase`（IDは終点の北綾瀬だが、北綾瀬は支線なので綾瀬方面と呼ぶ）
+- 駅IDは`odpt.Station:TokyoMetro.Chiyoda.<駅名>`の形（例: `…Chiyoda.YoyogiUehara`）。
+- 始発駅のラベル: 千代田線内の駅から出る列車は「◯◯始発」（綾瀬始発・北綾瀬始発など）。JR常磐線や小田急線から来る列車は「直通」にまとめる。
+  - 常磐線から来る列車は、`odpt:originStation`にJRの駅（例: `odpt.Station:JR-East.JobanLocal.Abiko`）が入る。
+  - 小田急線から来る列車は、`odpt:originStation`が空で来る。空は直通とみなす。
+- `data/trains.csv`の駅の列は代々木上原→北綾瀬の駅順。停まらない・通らない駅と終着駅は空にする。
+  - 行のキーは時刻表ID（`odpt:TrainTimetable`の`owl:sameAs`から路線の前置きを除いたもの）。
+  - 特急ロマンスカーは途中の停車駅に到着時刻しか無いので、終着駅以外は到着時刻を入れる。
+  - 千代田線内のどの駅からも発車しない時刻表（綾瀬に到着するだけのもの。2026-10-25時点で平日5件）は載せない。
+- 参考: [ODPTから代々木上原駅始発の便のデータを取得してみた](https://zenn.dev/greenteabiscuit/articles/5613babc3e6648)（2024-07、曜日区分・方向IDの実例）
+
 ## 動かすための設定
 
 - Secretsに`ODPT_CONSUMER_KEY`（ODPTのアクセストークン）を登録する。
