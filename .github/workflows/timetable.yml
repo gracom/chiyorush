@@ -1,0 +1,83 @@
+name: Timetable
+
+# ODPT から千代田線の列車時刻表を週1回取得し、data/ を作り直す。
+# 差分が出たら（＝ダイヤが変わったら）、ブランチ update/timetable でPRを出す。main には直接コミットしない。
+# マージすると pages.yml が動いて、公開中のページに反映される。
+#
+# 事前準備:
+# - Secrets に ODPT_CONSUMER_KEY（ODPTのアクセストークン）を登録する
+# - Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」を有効にする
+
+on:
+  schedule:
+    - cron: '0 18 * * 0'   # 毎週日曜 18:00 UTC = 月曜 03:00 JST
+  workflow_dispatch:
+    inputs:
+      dump:
+        description: '生のJSONを Artifacts に残す（確かめたいことがあるとき用）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: timetable
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: テスト
+        run: python3 -m unittest discover -s tests
+
+      - name: 時刻表を取得してCSVにする
+        env:
+          ODPT_CONSUMER_KEY: ${{ secrets.ODPT_CONSUMER_KEY }}
+          DUMP: ${{ github.event.inputs.dump == 'true' }}
+        run: |
+          if [ "$DUMP" = true ]; then
+            python3 scripts/fetch_odpt.py --dump "$RUNNER_TEMP/odpt-raw"
+          else
+            python3 scripts/fetch_odpt.py
+          fi
+
+      - name: 生のJSONを残す
+        if: github.event.inputs.dump == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: odpt-raw
+          path: ${{ runner.temp }}/odpt-raw
+          retention-days: 7
+
+      - name: ページ用の時刻表を作る
+        run: python3 scripts/build_data.py
+
+      - name: 差分があればPRを出す
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add data/
+          if git diff --cached --quiet; then
+            echo "時刻表に変化なし"
+            exit 0
+          fi
+          DATE="$(TZ=Asia/Tokyo date +%Y-%m-%d)"
+          BRANCH=update/timetable
+          git switch -c "$BRANCH"
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "時刻表を ${DATE} 時点のODPTのデータで作り直す"
+          git push --force origin "$BRANCH"
+          OPEN="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -n "$OPEN" ]; then
+            echo "開いているPR #${OPEN} の中身を差し替えた"
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "時刻表を更新する（${DATE}）" \
+              --body "ODPTの列車時刻表に差分が出た。ダイヤ改正の可能性がある。マージすると公開中のページに反映される。"
+          fi
